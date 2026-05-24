@@ -250,12 +250,17 @@ function Resolve-CommandPayloadPath {
     }
 
     if ($launcherName -match '^(?i:wscript|cscript|mshta)$' -and
-        $Command -match '(?i)\s+(?:"([^"]+\.(?:vbs|vbe|js|jse|wsf|hta))"|''([^'']+\.(?:vbs|vbe|js|jse|wsf|hta))''|([^\s]+\.(?:vbs|vbe|js|jse|wsf|hta)))\b') {
+        $Command -match '(?i)\s+(?:"([^"]+\.(?:vbs|vbe|js|jse|wsf|hta))"|''([^'']+\.(?:vbs|vbe|js|jse|wsf|hta))''|([^\s]+\.(?:vbs|vbe|js|jse|wsf|hta)))(?=\s|$|[&|])') {
         return Get-FirstMatchValue -MatchValues $Matches
     }
 
     if ($launcherName -match '^(?i:rundll32)$' -and
         $Command -match '(?i)\s+(?:"([^"]+\.dll)"|''([^'']+\.dll)''|([^\s,]+\.dll))[, ]') {
+        return Get-FirstMatchValue -MatchValues $Matches
+    }
+
+    if ($launcherName -match '^(?i:cmd)$' -and
+        $Command -match '(?i)\s+/(?:c|k)\s+(?:call\s+)?(?:"([^"]+\.(?:bat|cmd|ps1|vbs|vbe|js|jse|wsf|hta|exe|scr))"|''([^'']+\.(?:bat|cmd|ps1|vbs|vbe|js|jse|wsf|hta|exe|scr))''|([^\s&|]+\.(?:bat|cmd|ps1|vbs|vbe|js|jse|wsf|hta|exe|scr)))(?=\s|$|[&|])') {
         return Get-FirstMatchValue -MatchValues $Matches
     }
 
@@ -275,17 +280,12 @@ function Inspect-PersistentCommand {
     $reasons = New-Object System.Collections.Generic.List[string]
     $severity = 'Low'
 
-    if ($Category -eq 'Scheduled Task' -and $Name -eq '\Suspicious File Audit Weekly' -and
-        ($script:ToolFiles -contains (Get-NormalizedPath -Path $payloadPath))) {
-        return
-    }
-
     if (Test-UserWritableOrTempPath -Path $targetPath) {
         [void]$reasons.Add('launches from a user-writable or temporary folder')
         $severity = 'Medium'
     }
 
-    if ($Command -match '(?i)(powershell|pwsh|wscript|cscript|mshta|rundll32|regsvr32)(\.exe)?\b') {
+    if ($Command -match '(?i)(powershell|pwsh|cmd|wscript|cscript|mshta|rundll32|regsvr32)(\.exe)?\b') {
         [void]$reasons.Add('uses a script or living-off-the-land launcher')
         $severity = 'Medium'
     }
@@ -312,6 +312,39 @@ function Inspect-PersistentCommand {
 
     Add-Finding -Severity $severity -Category $Category -Item $Name `
         -Reason ($reasons -join '; ') -Path $targetPath -Publisher $publisher -Sha256 $hash
+}
+
+function Test-ExpectedWeeklyAuditCommand {
+    param([string]$Command)
+
+    $scannerPathPattern = [Regex]::Escape((Get-NormalizedPath -Path $PSCommandPath))
+    $prefix = '(?i)^(?:"?(?:[^"]*\\)?powershell(?:\.exe)?"?)\s+-NoProfile\s+-ExecutionPolicy\s+Bypass\s+-File\s+"?' +
+        $scannerPathPattern + '"?\s+-AuditProfile\s+Weekly\s+-VerifyFindingsWithKaspersky'
+    return ($Command -match ($prefix + '\s*$')) -or
+        ($Command -match ($prefix + '\s+-IncludeLargeUserFolders\s+-MaxFiles\s+100000\s*$'))
+}
+
+function Inspect-ScheduledTaskCommand {
+    param(
+        [string]$Name,
+        [string]$Command
+    )
+
+    if ($Name -eq '\Suspicious File Audit Weekly') {
+        $payloadPath = Resolve-CommandPayloadPath -Command $Command -LauncherPath (Resolve-CommandFilePath -Command $Command)
+        if (Test-ExpectedWeeklyAuditCommand -Command $Command) {
+            Add-Finding -Severity 'Info' -Category 'Scheduled Task' -Item $Name `
+                -Reason 'project weekly audit task matches expected configuration' -Path $payloadPath
+        }
+        else {
+            Add-Finding -Severity 'High' -Category 'Scheduled Task' -Item $Name `
+                -Reason ('project weekly audit task command differs from expected configuration: {0}' -f $Command) `
+                -Path $payloadPath -Sha256 (Get-SafeHash -Path $payloadPath)
+        }
+        return
+    }
+
+    Inspect-PersistentCommand -Category 'Scheduled Task' -Name $Name -Command $Command
 }
 
 function Inspect-RegistryAutoruns {
@@ -381,8 +414,7 @@ function Inspect-ScheduledTasks {
         foreach ($task in $tasks) {
             foreach ($action in @($task.Actions)) {
                 $command = ('{0} {1}' -f $action.Execute, $action.Arguments).Trim()
-                Inspect-PersistentCommand -Category 'Scheduled Task' `
-                    -Name ('{0}{1}' -f $task.TaskPath, $task.TaskName) -Command $command
+                Inspect-ScheduledTaskCommand -Name ('{0}{1}' -f $task.TaskPath, $task.TaskName) -Command $command
             }
         }
     }
@@ -434,21 +466,39 @@ function Inspect-WmiPersistence {
     }
 }
 
+function Inspect-ProcessRecord {
+    param([object]$Process)
+
+    if (Test-UserWritableOrTempPath -Path $Process.ExecutablePath) {
+        $signature = Get-SignatureDetails -Path $Process.ExecutablePath
+        $severity = if ($signature.Status -eq 'Valid') { 'Low' } else { 'Medium' }
+        Add-Finding -Severity $severity -Category 'Running Process' -Item $Process.Name `
+            -Reason ('is running from a user-writable location; signature status: {0}' -f $signature.Status) `
+            -Path $Process.ExecutablePath -Publisher $signature.Publisher -Sha256 (Get-SafeHash -Path $Process.ExecutablePath)
+    }
+
+    $commandLine = [string]$Process.CommandLine
+    if ([string]::IsNullOrWhiteSpace($commandLine)) {
+        return
+    }
+
+    $payloadPath = Resolve-CommandPayloadPath -Command $commandLine -LauncherPath ([string]$Process.ExecutablePath)
+    $launcherName = [IO.Path]::GetFileNameWithoutExtension([string]$Process.ExecutablePath)
+    $isCommandLauncher = $launcherName -match '^(?i:powershell|pwsh|cmd|wscript|cscript|mshta|rundll32|regsvr32)$'
+    $hasHighRiskIndicator = $commandLine -match '(?i)(-enc(odedcommand)?\b|frombase64string|javascript:|http[s]?://)'
+    if ($isCommandLauncher -and ($hasHighRiskIndicator -or
+        (-not [string]::IsNullOrWhiteSpace($payloadPath) -and (Test-UserWritableOrTempPath -Path $payloadPath)))) {
+        Inspect-PersistentCommand -Category 'Running Process Command' -Name $Process.Name -Command $commandLine
+    }
+}
+
 function Inspect-Processes {
     try {
         $processes = Get-CimInstance Win32_Process -ErrorAction Stop |
             Where-Object { -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) }
 
         foreach ($process in $processes) {
-            if (-not (Test-UserWritableOrTempPath -Path $process.ExecutablePath)) {
-                continue
-            }
-
-            $signature = Get-SignatureDetails -Path $process.ExecutablePath
-            $severity = if ($signature.Status -eq 'Valid') { 'Low' } else { 'Medium' }
-            Add-Finding -Severity $severity -Category 'Running Process' -Item $process.Name `
-                -Reason ('is running from a user-writable location; signature status: {0}' -f $signature.Status) `
-                -Path $process.ExecutablePath -Publisher $signature.Publisher -Sha256 (Get-SafeHash -Path $process.ExecutablePath)
+            Inspect-ProcessRecord -Process $process
         }
     }
     catch {

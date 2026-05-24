@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1 - 2026-05-24
+
+- Replaced the blanket weekly-task exemption with expected-configuration validation and high-risk reporting for altered arguments.
+- Added payload extraction for `cmd.exe /c` and `/k` command launchers.
+- Added command-line inspection for running processes, including encoded PowerShell indicators.
+- Restricted URL-based process findings to actual script or living-off-the-land launchers to avoid ordinary application noise.
+- Added regression tests for altered weekly tasks, `cmd.exe` payloads, and process command-line findings.
+
 ## 0.3.0 - 2026-05-24
 
 - Fixed finding deduplication so identically named files in separate locations are reported independently.
