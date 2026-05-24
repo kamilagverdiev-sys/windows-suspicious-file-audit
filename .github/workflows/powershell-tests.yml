@@ -1,0 +1,40 @@
+name: PowerShell Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Ensure compatible Pester
+        shell: powershell
+        run: Install-Module Pester -RequiredVersion 3.4.0 -Force -Scope CurrentUser -SkipPublisherCheck
+
+      - name: Parse PowerShell scripts
+        shell: powershell
+        run: |
+          $parseErrors = @()
+          Get-ChildItem -Recurse -File -Filter '*.ps1' | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            $parseErrors += $errors
+          }
+          if ($parseErrors.Count -gt 0) {
+            $parseErrors | Format-List
+            exit 1
+          }
+
+      - name: Run tests
+        shell: powershell
+        run: |
+          Import-Module Pester -MinimumVersion 3.4.0
+          $result = Invoke-Pester -Script .\Tests -PassThru
+          if ($result.FailedCount -gt 0) {
+            exit 1
+          }

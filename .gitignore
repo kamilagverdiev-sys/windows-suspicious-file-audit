@@ -1,0 +1,5 @@
+reports/
+state/
+security-audit-output/
+*.log
+*.tmp
