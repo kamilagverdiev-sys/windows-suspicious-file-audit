@@ -30,6 +30,10 @@ jobs:
             exit 1
           }
 
+      - name: Initialize UI
+        shell: powershell
+        run: .\Start-AuditUI.ps1 -ValidateOnly
+
       - name: Run tests
         shell: powershell
         run: |

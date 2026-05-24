@@ -91,6 +91,18 @@ Describe 'Invoke-SuspiciousFileAudit file findings' {
             throw 'Expected distinct scan scopes to receive separate baselines.'
         }
     }
+
+    It 'does not report the graphical interface launchers during a project self-scan' {
+        $projectPath = Split-Path -Parent $scriptPath
+
+        & $scriptPath -ScanPath $projectPath -OutputDirectory $outputDirectory `
+            -StateDirectory $stateDirectory -AuditProfile SelfScan -SkipHostInspection -MaxFiles 50 | Out-Null
+
+        $report = Get-LatestAuditReport -OutputDirectory $outputDirectory
+        if (@($report.Findings | Where-Object { $_.Item -in @('Start-AuditUI.ps1', 'Start-AuditUI.cmd') }).Count -ne 0) {
+            throw 'Expected graphical interface launcher files to be ignored during a self-scan.'
+        }
+    }
 }
 
 Describe 'Invoke-SuspiciousFileAudit command inspection helpers' {

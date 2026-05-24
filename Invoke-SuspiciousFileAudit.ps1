@@ -51,6 +51,8 @@ $script:ToolFiles = @(
     [IO.Path]::GetFullPath($PSCommandPath),
     [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'Start-SuspiciousFileAudit.cmd')),
     [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'Start-DeepAudit.cmd')),
+    [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'Start-AuditUI.ps1')),
+    [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'Start-AuditUI.cmd')),
     [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'Install-WeeklyAudit.ps1')),
     [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'Remove-WeeklyAudit.ps1'))
 )

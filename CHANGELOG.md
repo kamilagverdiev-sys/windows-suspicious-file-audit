@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0 - 2026-05-24
+
+- Added a native Windows Forms interface for starting quick/deep audits and reviewing the latest results.
+- Added a double-click launcher for the graphical interface.
+- Excluded the UI launcher files from self-scans of the project directory.
+- Added CI validation that the UI initializes successfully on Windows.
+
 ## 0.3.1 - 2026-05-24
 
 - Replaced the blanket weekly-task exemption with expected-configuration validation and high-risk reporting for altered arguments.
